@@ -10,6 +10,7 @@ Key functions:
 - get_most_recent_commit_hash(): Get the current commit hash regardless of working directory state
 - get_commit_hash(): Get commit hash only if working directory is clean
 - ensure_code_is_tracked(): Verify all changes are committed and return commit hash
+- make_side_commit(): Create a side commit to capture current state without affecting current branch
 
 All functions raise RuntimeError if not in a git repository or if git commands fail.
 '''
