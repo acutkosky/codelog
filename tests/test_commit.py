@@ -3,6 +3,9 @@ Tests for the commit module functions.
 """
 
 import pytest
+import tempfile
+import os
+import subprocess
 from unittest.mock import patch, Mock
 from codelog.commit import (
     get_most_recent_commit_hash,
@@ -314,4 +317,168 @@ class TestIntegration:
         assert get_commit_hash() is None
         
         with pytest.raises(RuntimeError, match="Uncommitted changes detected"):
-            ensure_code_is_tracked() 
+            ensure_code_is_tracked()
+
+
+class TestRealGitIntegration:
+    """Real git integration tests using temporary repositories."""
+    
+    def _create_git_repo(self, temp_dir):
+        """Helper to create a git repository in the given directory."""
+        subprocess.run(['git', 'init'], cwd=temp_dir, check=True)
+        subprocess.run(['git', 'config', 'user.name', 'Test User'], cwd=temp_dir, check=True)
+        subprocess.run(['git', 'config', 'user.email', 'test@example.com'], cwd=temp_dir, check=True)
+    
+    def _create_initial_commit(self, temp_dir):
+        """Helper to create an initial commit with a file."""
+        with open(os.path.join(temp_dir, 'README.md'), 'w') as f:
+            f.write("# Test Repository\n")
+        
+        subprocess.run(['git', 'add', 'README.md'], cwd=temp_dir, check=True)
+        subprocess.run(['git', 'commit', '-m', 'Initial commit'], cwd=temp_dir, check=True)
+    
+    def test_clean_repository(self):
+        """Test with a clean git repository."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._create_git_repo(temp_dir)
+            self._create_initial_commit(temp_dir)
+            
+            # Test all functions
+            assert _is_working_directory_clean(temp_dir) is True
+            commit_hash = get_most_recent_commit_hash(temp_dir)
+            assert len(commit_hash) == 40  # Full git hash length
+            assert get_commit_hash(temp_dir) == commit_hash
+            assert ensure_code_is_tracked(temp_dir) == commit_hash
+    
+    def test_repository_with_modified_file(self):
+        """Test with a repository that has a modified file."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._create_git_repo(temp_dir)
+            self._create_initial_commit(temp_dir)
+            
+            # Modify the file
+            with open(os.path.join(temp_dir, 'README.md'), 'w') as f:
+                f.write("# Modified Test Repository\n")
+            
+            # Test functions
+            assert _is_working_directory_clean(temp_dir) is False
+            commit_hash = get_most_recent_commit_hash(temp_dir)
+            assert len(commit_hash) == 40
+            assert get_commit_hash(temp_dir) is None
+            
+            with pytest.raises(RuntimeError, match="Uncommitted changes detected"):
+                ensure_code_is_tracked(temp_dir)
+    
+    def test_repository_with_untracked_file(self):
+        """Test with a repository that has an untracked file."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._create_git_repo(temp_dir)
+            self._create_initial_commit(temp_dir)
+            
+            # Add an untracked file
+            with open(os.path.join(temp_dir, 'new_file.txt'), 'w') as f:
+                f.write("This is a new file\n")
+            
+            # Test functions
+            assert _is_working_directory_clean(temp_dir) is False
+            commit_hash = get_most_recent_commit_hash(temp_dir)
+            assert len(commit_hash) == 40
+            assert get_commit_hash(temp_dir) is None
+            
+            with pytest.raises(RuntimeError, match="Uncommitted changes detected"):
+                ensure_code_is_tracked(temp_dir)
+    
+    def test_repository_with_staged_file(self):
+        """Test with a repository that has a staged file."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._create_git_repo(temp_dir)
+            self._create_initial_commit(temp_dir)
+            
+            # Create and stage a new file
+            with open(os.path.join(temp_dir, 'staged_file.txt'), 'w') as f:
+                f.write("This file is staged\n")
+            
+            subprocess.run(['git', 'add', 'staged_file.txt'], cwd=temp_dir, check=True)
+            
+            # Test functions
+            assert _is_working_directory_clean(temp_dir) is False
+            commit_hash = get_most_recent_commit_hash(temp_dir)
+            assert len(commit_hash) == 40
+            assert get_commit_hash(temp_dir) is None
+            
+            with pytest.raises(RuntimeError, match="Uncommitted changes detected"):
+                ensure_code_is_tracked(temp_dir)
+    
+    def test_repository_with_multiple_changes(self):
+        """Test with a repository that has multiple types of changes."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._create_git_repo(temp_dir)
+            self._create_initial_commit(temp_dir)
+            
+            # Modify existing file
+            with open(os.path.join(temp_dir, 'README.md'), 'w') as f:
+                f.write("# Modified Test Repository\n")
+            
+            # Add untracked file
+            with open(os.path.join(temp_dir, 'untracked.txt'), 'w') as f:
+                f.write("Untracked file\n")
+            
+            # Create and stage a file
+            with open(os.path.join(temp_dir, 'staged.txt'), 'w') as f:
+                f.write("Staged file\n")
+            subprocess.run(['git', 'add', 'staged.txt'], cwd=temp_dir, check=True)
+            
+            # Test functions
+            assert _is_working_directory_clean(temp_dir) is False
+            commit_hash = get_most_recent_commit_hash(temp_dir)
+            assert len(commit_hash) == 40
+            assert get_commit_hash(temp_dir) is None
+            
+            with pytest.raises(RuntimeError, match="Uncommitted changes detected"):
+                ensure_code_is_tracked(temp_dir)
+    
+    def test_not_a_git_repository(self):
+        """Test behavior when the path is not a git repository."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Create a regular directory (not a git repo)
+            with open(os.path.join(temp_dir, 'some_file.txt'), 'w') as f:
+                f.write("Just a regular file\n")
+            
+            # Test functions - should raise RuntimeError
+            with pytest.raises(RuntimeError):
+                _is_working_directory_clean(temp_dir)
+            
+            with pytest.raises(RuntimeError):
+                get_most_recent_commit_hash(temp_dir)
+            
+            with pytest.raises(RuntimeError):
+                get_commit_hash(temp_dir)
+            
+            with pytest.raises(RuntimeError):
+                ensure_code_is_tracked(temp_dir)
+    
+    def test_path_parameter_functionality(self):
+        """Test that the path parameter works correctly."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._create_git_repo(temp_dir)
+            self._create_initial_commit(temp_dir)
+            
+            # Test from a different directory
+            original_cwd = os.getcwd()
+            try:
+                # Change to a different directory
+                os.chdir('/tmp')
+                
+                # Test functions with path parameter
+                assert _is_working_directory_clean(temp_dir) is True
+                commit_hash = get_most_recent_commit_hash(temp_dir)
+                assert len(commit_hash) == 40
+                assert get_commit_hash(temp_dir) == commit_hash
+                assert ensure_code_is_tracked(temp_dir) == commit_hash
+                
+                # Test that current directory is not affected
+                with pytest.raises(RuntimeError):
+                    _is_working_directory_clean()
+                    
+            finally:
+                os.chdir(original_cwd) 
