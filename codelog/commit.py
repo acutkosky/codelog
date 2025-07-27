@@ -158,6 +158,21 @@ def _add_all_files_to_temp_index(path: Optional[str] = None, env: Optional[dict]
         pass
 
 
+def _add_tracked_files_to_temp_index(path: Optional[str] = None, env: Optional[dict] = None) -> None:
+    '''Add tracked files with changes and staged files to the temporary index.
+    
+    Args:
+        path: Optional path to add files from. If None, uses current directory.
+        env: Environment dict with GIT_INDEX_FILE set.
+    '''
+    # Add all tracked files with changes (unstaged and staged)
+    try:
+        _run_git_command(['add', '-u'], path, env)
+    except RuntimeError:
+        # No tracked files to update, which is fine
+        pass
+
+
 def _is_working_directory_clean(path: Optional[str] = None) -> bool:
     '''Checks if the git working directory is clean.
     
@@ -246,7 +261,8 @@ def make_side_commit(path: Optional[str] = None, force: bool = False) -> str:
     The current file contents of the directory are not changed at any time, and the
     current git state is not changed (with the exception of the new branch).
 
-    The commit hash of this "side commit" is returned.
+    The commit hash of this "side commit" is returned. Only tracked files with changes
+    (unstaged or staged) are included in the side commit; untracked files are ignored.
 
     This way, in the future we can recover the current state of the codebase from
     this hash, but we do not create extra commits on the current branch.
@@ -277,8 +293,8 @@ def make_side_commit(path: Optional[str] = None, force: bool = False) -> str:
     temp_index_path, index_env = _create_temporary_index(path)
     
     try:
-        # Step 1: Add all files to temporary index
-        _add_all_files_to_temp_index(path, index_env)
+        # Step 1: Add only tracked files with changes to temporary index
+        _add_tracked_files_to_temp_index(path, index_env)
         
         # Step 2: Create tree object from temporary index
         tree_hash = _run_git_command(['write-tree'], path, index_env)

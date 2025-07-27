@@ -306,7 +306,7 @@ class TestMakeSideCommit:
         ]
         
         with patch('codelog.commit._create_temporary_index') as mock_create_index, \
-             patch('codelog.commit._add_all_files_to_temp_index') as mock_add_files, \
+             patch('codelog.commit._add_tracked_files_to_temp_index') as mock_add_files, \
              patch('codelog.commit._cleanup_temporary_index') as mock_cleanup:
             
             mock_create_index.return_value = ("/tmp/index.tmp", {"GIT_INDEX_FILE": "/tmp/index.tmp"})
@@ -333,7 +333,7 @@ class TestMakeSideCommit:
         ]
         
         with patch('codelog.commit._create_temporary_index') as mock_create_index, \
-             patch('codelog.commit._add_all_files_to_temp_index') as mock_add_files, \
+             patch('codelog.commit._add_tracked_files_to_temp_index') as mock_add_files, \
              patch('codelog.commit._cleanup_temporary_index') as mock_cleanup:
             
             mock_create_index.return_value = ("/tmp/index.tmp", {"GIT_INDEX_FILE": "/tmp/index.tmp"})
@@ -359,7 +359,7 @@ class TestMakeSideCommit:
         ]
         
         with patch('codelog.commit._create_temporary_index') as mock_create_index, \
-             patch('codelog.commit._add_all_files_to_temp_index') as mock_add_files, \
+             patch('codelog.commit._add_tracked_files_to_temp_index') as mock_add_files, \
              patch('codelog.commit._cleanup_temporary_index') as mock_cleanup:
             
             mock_create_index.return_value = ("/tmp/index.tmp", {"GIT_INDEX_FILE": "/tmp/index.tmp"})
@@ -385,7 +385,7 @@ class TestMakeSideCommit:
         ]
         
         with patch('codelog.commit._create_temporary_index') as mock_create_index, \
-             patch('codelog.commit._add_all_files_to_temp_index') as mock_add_files, \
+             patch('codelog.commit._add_tracked_files_to_temp_index') as mock_add_files, \
              patch('codelog.commit._cleanup_temporary_index') as mock_cleanup:
             
             mock_create_index.return_value = ("/tmp/index.tmp", {"GIT_INDEX_FILE": "/tmp/index.tmp"})
@@ -409,7 +409,7 @@ class TestMakeSideCommit:
         ]
         
         with patch('codelog.commit._create_temporary_index') as mock_create_index, \
-             patch('codelog.commit._add_all_files_to_temp_index') as mock_add_files, \
+             patch('codelog.commit._add_tracked_files_to_temp_index') as mock_add_files, \
              patch('codelog.commit._cleanup_temporary_index') as mock_cleanup:
             
             mock_create_index.return_value = ("/tmp/index.tmp", {"GIT_INDEX_FILE": "/tmp/index.tmp"})
@@ -426,7 +426,7 @@ class TestMakeSideCommit:
         mock_is_clean.return_value = False
         
         with patch('codelog.commit._create_temporary_index') as mock_create_index, \
-             patch('codelog.commit._add_all_files_to_temp_index') as mock_add_files, \
+             patch('codelog.commit._add_tracked_files_to_temp_index') as mock_add_files, \
              patch('codelog.commit._cleanup_temporary_index') as mock_cleanup, \
              patch('codelog.commit._run_git_command') as mock_run_git:
             
@@ -445,7 +445,7 @@ class TestMakeSideCommit:
         mock_is_clean.return_value = False
         
         with patch('codelog.commit._create_temporary_index') as mock_create_index, \
-             patch('codelog.commit._add_all_files_to_temp_index') as mock_add_files, \
+             patch('codelog.commit._add_tracked_files_to_temp_index') as mock_add_files, \
              patch('codelog.commit._cleanup_temporary_index') as mock_cleanup, \
              patch('codelog.commit._run_git_command') as mock_run_git:
             
@@ -578,10 +578,10 @@ class TestMakeSideCommitIntegration:
             # Verify working directory is unchanged
             assert os.path.exists(os.path.join(temp_dir, 'new_file.txt'))
             
-            # Verify the side commit contains the untracked file
-            result = subprocess.run(['git', 'show', f'{side_commit_hash}:new_file.txt'], cwd=temp_dir, capture_output=True, text=True, check=True)
-            commit_content = result.stdout
-            assert commit_content == "This is a new file\n"
+            # Verify the side commit does NOT contain the untracked file
+            # (since we changed the behavior to only include tracked files)
+            result = subprocess.run(['git', 'show', f'{side_commit_hash}:new_file.txt'], cwd=temp_dir, capture_output=True, text=True, check=False)
+            assert result.returncode != 0  # Should fail because file is not in commit
     
     def test_side_commit_with_staged_file(self):
         """Test side commit with a staged file."""
@@ -610,13 +610,13 @@ class TestMakeSideCommitIntegration:
             self._create_git_repo(temp_dir)
             self._create_initial_commit(temp_dir)
             
-            # Create various types of changes
+            # Create a tracked file and commit it
             with open(os.path.join(temp_dir, 'modified.txt'), 'w') as f:
                 f.write("Original content\n")
             subprocess.run(['git', 'add', 'modified.txt'], cwd=temp_dir, check=True)
             subprocess.run(['git', 'commit', '-m', 'Add modified.txt'], cwd=temp_dir, check=True)
             
-            # Modify the file
+            # Modify the tracked file
             with open(os.path.join(temp_dir, 'modified.txt'), 'w') as f:
                 f.write("Modified content\n")
             
@@ -664,10 +664,9 @@ class TestMakeSideCommitIntegration:
             side_commit_hash = make_side_commit(temp_dir)
             assert len(side_commit_hash) == 40  # Valid git hash
             
-            # Verify the side commit contains the file
-            result = subprocess.run(['git', 'show', f'{side_commit_hash}:new_file.txt'], cwd=temp_dir, capture_output=True, text=True, check=True)
-            commit_content = result.stdout
-            assert commit_content == "New file content\n"
+            # Verify the side commit does NOT contain the file (since it's untracked)
+            result = subprocess.run(['git', 'show', f'{side_commit_hash}:new_file.txt'], cwd=temp_dir, capture_output=True, text=True, check=False)
+            assert result.returncode != 0  # Should fail because file is not in commit
     
     def test_side_commit_concurrent_processes(self):
         """Test that multiple side commits can be created concurrently."""
@@ -675,22 +674,22 @@ class TestMakeSideCommitIntegration:
             self._create_git_repo(temp_dir)
             self._create_initial_commit(temp_dir)
             
-            # Create multiple side commits with slightly different content
+            # Create multiple side commits with modified tracked files
             import time
             
-            # First commit with one file
-            with open(os.path.join(temp_dir, 'test1.txt'), 'w') as f:
-                f.write("Test content 1\n")
+            # First commit with modified README
+            with open(os.path.join(temp_dir, 'README.md'), 'w') as f:
+                f.write("# Test Repository - Version 1\n")
             hash1 = make_side_commit(temp_dir)
             
-            # Second commit with two files
-            with open(os.path.join(temp_dir, 'test2.txt'), 'w') as f:
-                f.write("Test content 2\n")
+            # Second commit with different README content
+            with open(os.path.join(temp_dir, 'README.md'), 'w') as f:
+                f.write("# Test Repository - Version 2\n")
             hash2 = make_side_commit(temp_dir)
             
-            # Third commit with three files
-            with open(os.path.join(temp_dir, 'test3.txt'), 'w') as f:
-                f.write("Test content 3\n")
+            # Third commit with yet different README content
+            with open(os.path.join(temp_dir, 'README.md'), 'w') as f:
+                f.write("# Test Repository - Version 3\n")
             hash3 = make_side_commit(temp_dir)
             
             # All should be different (due to different content)
@@ -715,9 +714,9 @@ class TestMakeSideCommitIntegration:
             self._create_git_repo(temp_dir)
             self._create_initial_commit(temp_dir)
             
-            # Create identical content
-            with open(os.path.join(temp_dir, 'identical.txt'), 'w') as f:
-                f.write("Identical content\n")
+            # Modify the README with identical content multiple times
+            with open(os.path.join(temp_dir, 'README.md'), 'w') as f:
+                f.write("# Test Repository - Identical\n")
             
             # Create multiple side commits with identical content
             hash1 = make_side_commit(temp_dir)
@@ -740,9 +739,9 @@ class TestMakeSideCommitIntegration:
             
             # Verify we can recover the exact state from any of the hashes
             for hash_val in [hash1, hash2, hash3]:
-                result = subprocess.run(['git', 'show', f'{hash_val}:identical.txt'], cwd=temp_dir, capture_output=True, text=True, check=True)
+                result = subprocess.run(['git', 'show', f'{hash_val}:README.md'], cwd=temp_dir, capture_output=True, text=True, check=True)
                 recovered_content = result.stdout
-                assert recovered_content == "Identical content\n"
+                assert recovered_content == "# Test Repository - Identical\n"
             
             # Verify the tree hashes are the same (content-based, no timestamps)
             tree1 = subprocess.run(['git', 'show', '--format=%T', '--no-patch', hash1], cwd=temp_dir, capture_output=True, text=True, check=True).stdout.strip()
@@ -753,6 +752,54 @@ class TestMakeSideCommitIntegration:
             assert tree1 == tree2
             assert tree2 == tree3
             assert tree1 == tree3
+
+    def test_side_commit_only_includes_tracked_files_with_changes(self):
+        """Test that side commit includes tracked files with changes and staged files, but not untracked files."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._create_git_repo(temp_dir)
+            self._create_initial_commit(temp_dir)
+            
+            # Create a tracked file and commit it
+            with open(os.path.join(temp_dir, 'tracked_file.txt'), 'w') as f:
+                f.write("Original tracked content\n")
+            subprocess.run(['git', 'add', 'tracked_file.txt'], cwd=temp_dir, check=True)
+            subprocess.run(['git', 'commit', '-m', 'Add tracked file'], cwd=temp_dir, check=True)
+            
+            # Modify the tracked file
+            with open(os.path.join(temp_dir, 'tracked_file.txt'), 'w') as f:
+                f.write("Modified tracked content\n")
+            
+            # Create an untracked file
+            with open(os.path.join(temp_dir, 'untracked_file.txt'), 'w') as f:
+                f.write("Untracked content\n")
+            
+            # Stage a new file (not yet committed)
+            with open(os.path.join(temp_dir, 'staged_file.txt'), 'w') as f:
+                f.write("Staged content\n")
+            subprocess.run(['git', 'add', 'staged_file.txt'], cwd=temp_dir, check=True)
+            
+            # Create side commit
+            side_commit_hash = make_side_commit(temp_dir)
+            assert len(side_commit_hash) == 40  # Valid git hash
+            
+            # Verify the side commit contains the modified tracked file
+            result = subprocess.run(['git', 'show', f'{side_commit_hash}:tracked_file.txt'], cwd=temp_dir, capture_output=True, text=True, check=True)
+            commit_content = result.stdout
+            assert commit_content == "Modified tracked content\n"
+            
+            # Verify the side commit does NOT contain the untracked file
+            result = subprocess.run(['git', 'show', f'{side_commit_hash}:untracked_file.txt'], cwd=temp_dir, capture_output=True, text=True, check=False)
+            assert result.returncode != 0  # Should fail because file is not in commit
+            
+            # Verify the side commit contains the staged file
+            result = subprocess.run(['git', 'show', f'{side_commit_hash}:staged_file.txt'], cwd=temp_dir, capture_output=True, text=True, check=True)
+            commit_content = result.stdout
+            assert commit_content == "Staged content\n"
+            
+            # Verify the side commit contains the original README.md (unchanged tracked file)
+            result = subprocess.run(['git', 'show', f'{side_commit_hash}:README.md'], cwd=temp_dir, capture_output=True, text=True, check=True)
+            commit_content = result.stdout
+            assert commit_content == "# Test Repository\n"
 
 
 class TestIntegration:
