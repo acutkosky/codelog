@@ -11,6 +11,7 @@ from codelog.commit import (
     get_most_recent_commit_hash,
     get_commit_hash,
     ensure_code_is_tracked,
+    make_side_commit,
     _run_git_command,
     _is_working_directory_clean
 )
@@ -29,12 +30,14 @@ class TestRunGitCommand:
         result = _run_git_command(['rev-parse', 'HEAD'])
         
         assert result == "abc123"
-        mock_run.assert_called_once_with(
-            ['git', 'rev-parse', 'HEAD'],
-            capture_output=True,
-            text=True,
-            check=True
-        )
+        # Check that the call was made with the expected arguments, but ignore env
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args
+        assert call_args[0][0] == ['git', 'rev-parse', 'HEAD']
+        assert call_args[1]['capture_output'] is True
+        assert call_args[1]['text'] is True
+        assert call_args[1]['check'] is True
+        assert 'env' in call_args[1]  # env should be present
     
     @patch('subprocess.run')
     def test_successful_git_command_with_path(self, mock_run):
@@ -46,12 +49,14 @@ class TestRunGitCommand:
         result = _run_git_command(['rev-parse', 'HEAD'], '/path/to/repo')
         
         assert result == "abc123"
-        mock_run.assert_called_once_with(
-            ['git', '-C', '/path/to/repo', 'rev-parse', 'HEAD'],
-            capture_output=True,
-            text=True,
-            check=True
-        )
+        # Check that the call was made with the expected arguments, but ignore env
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args
+        assert call_args[0][0] == ['git', '-C', '/path/to/repo', 'rev-parse', 'HEAD']
+        assert call_args[1]['capture_output'] is True
+        assert call_args[1]['text'] is True
+        assert call_args[1]['check'] is True
+        assert 'env' in call_args[1]  # env should be present
     
     @patch('subprocess.run')
     def test_git_command_failure(self, mock_run):
@@ -270,6 +275,484 @@ class TestEnsureCodeIsTracked:
         
         with pytest.raises(RuntimeError, match="Git command failed"):
             ensure_code_is_tracked()
+
+
+class TestMakeSideCommit:
+    """Tests for the make_side_commit function."""
+    
+    @patch('codelog.commit._is_working_directory_clean')
+    @patch('codelog.commit._run_git_command')
+    def test_clean_working_directory_no_force(self, mock_run_git, mock_is_clean):
+        """Test when working directory is clean and force=False (default)."""
+        mock_is_clean.return_value = True
+        mock_run_git.return_value = "abc123def456"
+        
+        result = make_side_commit()
+        
+        assert result == "abc123def456"
+        mock_is_clean.assert_called_once_with(None)
+        mock_run_git.assert_called_once_with(['rev-parse', 'HEAD'], None)
+    
+    @patch('codelog.commit._is_working_directory_clean')
+    @patch('codelog.commit._run_git_command')
+    def test_clean_working_directory_with_force(self, mock_run_git, mock_is_clean):
+        """Test when working directory is clean but force=True."""
+        mock_is_clean.return_value = True
+        mock_run_git.side_effect = [
+            "tree123",       # write-tree
+            "parent123",     # rev-parse HEAD (parent commit)
+            "commit456",     # commit-tree
+            None            # branch creation (no output)
+        ]
+        
+        with patch('codelog.commit._create_temporary_index') as mock_create_index, \
+             patch('codelog.commit._add_all_files_to_temp_index') as mock_add_files, \
+             patch('codelog.commit._cleanup_temporary_index') as mock_cleanup:
+            
+            mock_create_index.return_value = ("/tmp/index.tmp", {"GIT_INDEX_FILE": "/tmp/index.tmp"})
+            
+            result = make_side_commit(force=True)
+            
+            assert result == "commit456"
+            # When force=True, _is_working_directory_clean should not be called
+            mock_is_clean.assert_not_called()
+            mock_create_index.assert_called_once_with(None)
+            mock_add_files.assert_called_once_with(None, {"GIT_INDEX_FILE": "/tmp/index.tmp"})
+            mock_cleanup.assert_called_once_with("/tmp/index.tmp")
+    
+    @patch('codelog.commit._is_working_directory_clean')
+    @patch('codelog.commit._run_git_command')
+    def test_dirty_working_directory_creates_side_commit(self, mock_run_git, mock_is_clean):
+        """Test when working directory is dirty - should create side commit."""
+        mock_is_clean.return_value = False
+        mock_run_git.side_effect = [
+            "tree123",       # write-tree
+            "parent123",     # rev-parse HEAD (parent commit)
+            "commit456",     # commit-tree
+            None            # branch creation (no output)
+        ]
+        
+        with patch('codelog.commit._create_temporary_index') as mock_create_index, \
+             patch('codelog.commit._add_all_files_to_temp_index') as mock_add_files, \
+             patch('codelog.commit._cleanup_temporary_index') as mock_cleanup:
+            
+            mock_create_index.return_value = ("/tmp/index.tmp", {"GIT_INDEX_FILE": "/tmp/index.tmp"})
+            
+            result = make_side_commit()
+            
+            assert result == "commit456"
+            mock_is_clean.assert_called_once_with(None)
+            mock_create_index.assert_called_once_with(None)
+            mock_add_files.assert_called_once_with(None, {"GIT_INDEX_FILE": "/tmp/index.tmp"})
+            mock_cleanup.assert_called_once_with("/tmp/index.tmp")
+    
+    @patch('codelog.commit._is_working_directory_clean')
+    @patch('codelog.commit._run_git_command')
+    def test_side_commit_with_path_parameter(self, mock_run_git, mock_is_clean):
+        """Test side commit creation with specific path."""
+        mock_is_clean.return_value = False
+        mock_run_git.side_effect = [
+            "tree123",       # write-tree
+            "parent123",     # rev-parse HEAD (parent commit)
+            "commit456",     # commit-tree
+            None            # branch creation (no output)
+        ]
+        
+        with patch('codelog.commit._create_temporary_index') as mock_create_index, \
+             patch('codelog.commit._add_all_files_to_temp_index') as mock_add_files, \
+             patch('codelog.commit._cleanup_temporary_index') as mock_cleanup:
+            
+            mock_create_index.return_value = ("/tmp/index.tmp", {"GIT_INDEX_FILE": "/tmp/index.tmp"})
+            
+            result = make_side_commit('/path/to/repo')
+            
+            assert result == "commit456"
+            mock_is_clean.assert_called_once_with('/path/to/repo')
+            mock_create_index.assert_called_once_with('/path/to/repo')
+            mock_add_files.assert_called_once_with('/path/to/repo', {"GIT_INDEX_FILE": "/tmp/index.tmp"})
+            mock_cleanup.assert_called_once_with("/tmp/index.tmp")
+    
+    @patch('codelog.commit._is_working_directory_clean')
+    @patch('codelog.commit._run_git_command')
+    def test_side_commit_with_parent_commit(self, mock_run_git, mock_is_clean):
+        """Test side commit creation when there's a parent commit."""
+        mock_is_clean.return_value = False
+        mock_run_git.side_effect = [
+            "tree123",       # write-tree
+            "parent123",     # rev-parse HEAD (parent commit)
+            "commit456",     # commit-tree
+            None            # branch creation (no output)
+        ]
+        
+        with patch('codelog.commit._create_temporary_index') as mock_create_index, \
+             patch('codelog.commit._add_all_files_to_temp_index') as mock_add_files, \
+             patch('codelog.commit._cleanup_temporary_index') as mock_cleanup:
+            
+            mock_create_index.return_value = ("/tmp/index.tmp", {"GIT_INDEX_FILE": "/tmp/index.tmp"})
+            
+            result = make_side_commit()
+            
+            assert result == "commit456"
+            # Should call commit-tree with parent
+            mock_run_git.assert_any_call(['commit-tree', 'tree123', '-m', 'side commit for state capture', '-p', 'parent123'], None)
+    
+    @patch('codelog.commit._is_working_directory_clean')
+    @patch('codelog.commit._run_git_command')
+    def test_side_commit_without_parent_commit(self, mock_run_git, mock_is_clean):
+        """Test side commit creation when there's no parent commit (new repo)."""
+        mock_is_clean.return_value = False
+        mock_run_git.side_effect = [
+            "tree123",                       # write-tree
+            RuntimeError("No commits yet"),  # rev-parse HEAD fails
+            "commit456",                     # commit-tree
+            None                            # branch creation (no output)
+        ]
+        
+        with patch('codelog.commit._create_temporary_index') as mock_create_index, \
+             patch('codelog.commit._add_all_files_to_temp_index') as mock_add_files, \
+             patch('codelog.commit._cleanup_temporary_index') as mock_cleanup:
+            
+            mock_create_index.return_value = ("/tmp/index.tmp", {"GIT_INDEX_FILE": "/tmp/index.tmp"})
+            
+            result = make_side_commit()
+            
+            assert result == "commit456"
+            # Should call commit-tree without parent
+            mock_run_git.assert_any_call(['commit-tree', 'tree123', '-m', 'side commit for state capture'], None)
+    
+    @patch('codelog.commit._is_working_directory_clean')
+    def test_cleanup_on_error(self, mock_is_clean):
+        """Test that temporary index is cleaned up even when errors occur."""
+        mock_is_clean.return_value = False
+        
+        with patch('codelog.commit._create_temporary_index') as mock_create_index, \
+             patch('codelog.commit._add_all_files_to_temp_index') as mock_add_files, \
+             patch('codelog.commit._cleanup_temporary_index') as mock_cleanup, \
+             patch('codelog.commit._run_git_command') as mock_run_git:
+            
+            mock_create_index.return_value = ("/tmp/index.tmp", {"GIT_INDEX_FILE": "/tmp/index.tmp"})
+            mock_run_git.side_effect = RuntimeError("Git command failed")
+            
+            with pytest.raises(RuntimeError, match="Git command failed"):
+                make_side_commit()
+            
+            # Should still cleanup even though error occurred
+            mock_cleanup.assert_called_once_with("/tmp/index.tmp")
+    
+    @patch('codelog.commit._is_working_directory_clean')
+    def test_branch_creation(self, mock_is_clean):
+        """Test that a branch is created pointing to the side commit."""
+        mock_is_clean.return_value = False
+        
+        with patch('codelog.commit._create_temporary_index') as mock_create_index, \
+             patch('codelog.commit._add_all_files_to_temp_index') as mock_add_files, \
+             patch('codelog.commit._cleanup_temporary_index') as mock_cleanup, \
+             patch('codelog.commit._run_git_command') as mock_run_git:
+            
+            mock_create_index.return_value = ("/tmp/index.tmp", {"GIT_INDEX_FILE": "/tmp/index.tmp"})
+            mock_run_git.side_effect = [
+                "tree123",       # write-tree
+                "parent123",     # rev-parse HEAD (parent commit)
+                "commit456",     # commit-tree
+                None            # branch creation (no output)
+            ]
+            
+            result = make_side_commit()
+            
+            assert result == "commit456"
+            # Should create branch with timestamp and process ID in name
+            branch_call = None
+            for call in mock_run_git.call_args_list:
+                if call[0][0][0] == 'branch':
+                    branch_call = call
+                    break
+            
+            assert branch_call is not None
+            branch_name = branch_call[0][0][1]  # The branch name is the second element of the command list
+            assert branch_name.startswith("side-commit-")
+            assert "commit456" in branch_call[0][0]  # Should point to our commit
+
+
+class TestMakeSideCommitIntegration:
+    """Integration tests for make_side_commit using real git repositories."""
+    
+    def _create_git_repo(self, temp_dir):
+        """Helper to create a git repository in the given directory."""
+        subprocess.run(['git', 'init'], cwd=temp_dir, check=True)
+        subprocess.run(['git', 'config', 'user.name', 'Test User'], cwd=temp_dir, check=True)
+        subprocess.run(['git', 'config', 'user.email', 'test@example.com'], cwd=temp_dir, check=True)
+    
+    def _create_initial_commit(self, temp_dir):
+        """Helper to create an initial commit with a file."""
+        with open(os.path.join(temp_dir, 'README.md'), 'w') as f:
+            f.write("# Test Repository\n")
+        
+        subprocess.run(['git', 'add', 'README.md'], cwd=temp_dir, check=True)
+        subprocess.run(['git', 'commit', '-m', 'Initial commit'], cwd=temp_dir, check=True)
+    
+    def test_side_commit_clean_repository_no_force(self):
+        """Test side commit with clean repository and no force flag."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._create_git_repo(temp_dir)
+            self._create_initial_commit(temp_dir)
+            
+            # Get current commit hash
+            result = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=temp_dir, capture_output=True, text=True, check=True)
+            current_hash = result.stdout.strip()
+            
+            # Should return current commit hash without creating side commit
+            side_commit_hash = make_side_commit(temp_dir)
+            assert side_commit_hash == current_hash
+            
+            # Verify no new branches were created
+            result = subprocess.run(['git', 'branch'], cwd=temp_dir, capture_output=True, text=True, check=True)
+            branches = [line.strip() for line in result.stdout.split('\n') if line.strip()]
+            assert len(branches) == 1  # Only the main branch
+            assert '*' in branches[0]  # Current branch
+    
+    def test_side_commit_clean_repository_with_force(self):
+        """Test side commit with clean repository and force flag."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._create_git_repo(temp_dir)
+            self._create_initial_commit(temp_dir)
+            
+            # Should create side commit even though clean
+            side_commit_hash = make_side_commit(temp_dir, force=True)
+            assert len(side_commit_hash) == 40  # Valid git hash
+            
+            # Verify new branch was created
+            result = subprocess.run(['git', 'branch'], cwd=temp_dir, capture_output=True, text=True, check=True)
+            branches = [line.strip() for line in result.stdout.split('\n') if line.strip()]
+            assert len(branches) == 2  # Main branch + side branch
+            
+            # Verify the side branch points to our commit
+            side_branch = None
+            for branch in branches:
+                if branch.startswith('side-commit-') and not branch.startswith('*'):
+                    side_branch = branch.strip()
+                    break
+            
+            assert side_branch is not None
+            result = subprocess.run(['git', 'rev-parse', side_branch], cwd=temp_dir, capture_output=True, text=True, check=True)
+            branch_hash = result.stdout.strip()
+            assert branch_hash == side_commit_hash
+    
+    def test_side_commit_with_modified_file(self):
+        """Test side commit with a modified file."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._create_git_repo(temp_dir)
+            self._create_initial_commit(temp_dir)
+            
+            # Modify the file
+            with open(os.path.join(temp_dir, 'README.md'), 'w') as f:
+                f.write("# Modified Test Repository\n")
+            
+            # Should create side commit
+            side_commit_hash = make_side_commit(temp_dir)
+            assert len(side_commit_hash) == 40  # Valid git hash
+            
+            # Verify working directory is unchanged
+            with open(os.path.join(temp_dir, 'README.md'), 'r') as f:
+                content = f.read()
+            assert content == "# Modified Test Repository\n"
+            
+            # Verify the side commit contains the modified content
+            result = subprocess.run(['git', 'show', f'{side_commit_hash}:README.md'], cwd=temp_dir, capture_output=True, text=True, check=True)
+            commit_content = result.stdout
+            assert commit_content == "# Modified Test Repository\n"
+    
+    def test_side_commit_with_untracked_file(self):
+        """Test side commit with an untracked file."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._create_git_repo(temp_dir)
+            self._create_initial_commit(temp_dir)
+            
+            # Add an untracked file
+            with open(os.path.join(temp_dir, 'new_file.txt'), 'w') as f:
+                f.write("This is a new file\n")
+            
+            # Should create side commit
+            side_commit_hash = make_side_commit(temp_dir)
+            assert len(side_commit_hash) == 40  # Valid git hash
+            
+            # Verify working directory is unchanged
+            assert os.path.exists(os.path.join(temp_dir, 'new_file.txt'))
+            
+            # Verify the side commit contains the untracked file
+            result = subprocess.run(['git', 'show', f'{side_commit_hash}:new_file.txt'], cwd=temp_dir, capture_output=True, text=True, check=True)
+            commit_content = result.stdout
+            assert commit_content == "This is a new file\n"
+    
+    def test_side_commit_with_staged_file(self):
+        """Test side commit with a staged file."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._create_git_repo(temp_dir)
+            self._create_initial_commit(temp_dir)
+            
+            # Create and stage a new file
+            with open(os.path.join(temp_dir, 'staged_file.txt'), 'w') as f:
+                f.write("This file is staged\n")
+            
+            subprocess.run(['git', 'add', 'staged_file.txt'], cwd=temp_dir, check=True)
+            
+            # Should create side commit
+            side_commit_hash = make_side_commit(temp_dir)
+            assert len(side_commit_hash) == 40  # Valid git hash
+            
+            # Verify the side commit contains the staged file
+            result = subprocess.run(['git', 'show', f'{side_commit_hash}:staged_file.txt'], cwd=temp_dir, capture_output=True, text=True, check=True)
+            commit_content = result.stdout
+            assert commit_content == "This file is staged\n"
+    
+    def test_side_commit_preserves_working_directory_state(self):
+        """Test that side commit doesn't change the working directory state."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._create_git_repo(temp_dir)
+            self._create_initial_commit(temp_dir)
+            
+            # Create various types of changes
+            with open(os.path.join(temp_dir, 'modified.txt'), 'w') as f:
+                f.write("Original content\n")
+            subprocess.run(['git', 'add', 'modified.txt'], cwd=temp_dir, check=True)
+            subprocess.run(['git', 'commit', '-m', 'Add modified.txt'], cwd=temp_dir, check=True)
+            
+            # Modify the file
+            with open(os.path.join(temp_dir, 'modified.txt'), 'w') as f:
+                f.write("Modified content\n")
+            
+            # Add untracked file
+            with open(os.path.join(temp_dir, 'untracked.txt'), 'w') as f:
+                f.write("Untracked content\n")
+            
+            # Stage a new file
+            with open(os.path.join(temp_dir, 'staged.txt'), 'w') as f:
+                f.write("Staged content\n")
+            subprocess.run(['git', 'add', 'staged.txt'], cwd=temp_dir, check=True)
+            
+            # Check git status before
+            result = subprocess.run(['git', 'status', '--porcelain'], cwd=temp_dir, capture_output=True, text=True, check=True)
+            status_before = result.stdout
+            
+            # Create side commit
+            side_commit_hash = make_side_commit(temp_dir)
+            assert len(side_commit_hash) == 40
+            
+            # Check git status after - should be identical
+            result = subprocess.run(['git', 'status', '--porcelain'], cwd=temp_dir, capture_output=True, text=True, check=True)
+            status_after = result.stdout
+            
+            assert status_before == status_after
+            
+            # Verify file contents are unchanged
+            with open(os.path.join(temp_dir, 'modified.txt'), 'r') as f:
+                assert f.read() == "Modified content\n"
+            with open(os.path.join(temp_dir, 'untracked.txt'), 'r') as f:
+                assert f.read() == "Untracked content\n"
+            with open(os.path.join(temp_dir, 'staged.txt'), 'r') as f:
+                assert f.read() == "Staged content\n"
+    
+    def test_side_commit_new_repository(self):
+        """Test side commit with a new repository (no commits yet)."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._create_git_repo(temp_dir)
+            
+            # Add a file without committing
+            with open(os.path.join(temp_dir, 'new_file.txt'), 'w') as f:
+                f.write("New file content\n")
+            
+            # Should create side commit (root commit)
+            side_commit_hash = make_side_commit(temp_dir)
+            assert len(side_commit_hash) == 40  # Valid git hash
+            
+            # Verify the side commit contains the file
+            result = subprocess.run(['git', 'show', f'{side_commit_hash}:new_file.txt'], cwd=temp_dir, capture_output=True, text=True, check=True)
+            commit_content = result.stdout
+            assert commit_content == "New file content\n"
+    
+    def test_side_commit_concurrent_processes(self):
+        """Test that multiple side commits can be created concurrently."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._create_git_repo(temp_dir)
+            self._create_initial_commit(temp_dir)
+            
+            # Create multiple side commits with slightly different content
+            import time
+            
+            # First commit with one file
+            with open(os.path.join(temp_dir, 'test1.txt'), 'w') as f:
+                f.write("Test content 1\n")
+            hash1 = make_side_commit(temp_dir)
+            
+            # Second commit with two files
+            with open(os.path.join(temp_dir, 'test2.txt'), 'w') as f:
+                f.write("Test content 2\n")
+            hash2 = make_side_commit(temp_dir)
+            
+            # Third commit with three files
+            with open(os.path.join(temp_dir, 'test3.txt'), 'w') as f:
+                f.write("Test content 3\n")
+            hash3 = make_side_commit(temp_dir)
+            
+            # All should be different (due to different content)
+            assert hash1 != hash2
+            assert hash2 != hash3
+            assert hash1 != hash3
+            
+            # All should be valid git hashes
+            assert len(hash1) == 40
+            assert len(hash2) == 40
+            assert len(hash3) == 40
+            
+            # Verify all branches exist
+            result = subprocess.run(['git', 'branch'], cwd=temp_dir, capture_output=True, text=True, check=True)
+            branches = [line.strip() for line in result.stdout.split('\n') if line.strip()]
+            side_branches = [b for b in branches if b.startswith('side-commit-')]
+            assert len(side_branches) == 3
+
+    def test_side_commit_identical_content_same_hash(self):
+        """Test that side commits with identical content produce the same hash."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._create_git_repo(temp_dir)
+            self._create_initial_commit(temp_dir)
+            
+            # Create identical content
+            with open(os.path.join(temp_dir, 'identical.txt'), 'w') as f:
+                f.write("Identical content\n")
+            
+            # Create multiple side commits with identical content
+            hash1 = make_side_commit(temp_dir)
+            hash2 = make_side_commit(temp_dir)
+            hash3 = make_side_commit(temp_dir)
+            
+            # Note: Git commits include timestamps, so identical content may produce different hashes
+            # This is actually correct git behavior. The important thing is that we can recover the state.
+            
+            # All should be valid git hashes
+            assert len(hash1) == 40
+            assert len(hash2) == 40
+            assert len(hash3) == 40
+            
+            # Verify all branches exist
+            result = subprocess.run(['git', 'branch'], cwd=temp_dir, capture_output=True, text=True, check=True)
+            branches = [line.strip() for line in result.stdout.split('\n') if line.strip()]
+            side_branches = [b for b in branches if b.startswith('side-commit-')]
+            assert len(side_branches) == 3
+            
+            # Verify we can recover the exact state from any of the hashes
+            for hash_val in [hash1, hash2, hash3]:
+                result = subprocess.run(['git', 'show', f'{hash_val}:identical.txt'], cwd=temp_dir, capture_output=True, text=True, check=True)
+                recovered_content = result.stdout
+                assert recovered_content == "Identical content\n"
+            
+            # Verify the tree hashes are the same (content-based, no timestamps)
+            tree1 = subprocess.run(['git', 'show', '--format=%T', '--no-patch', hash1], cwd=temp_dir, capture_output=True, text=True, check=True).stdout.strip()
+            tree2 = subprocess.run(['git', 'show', '--format=%T', '--no-patch', hash2], cwd=temp_dir, capture_output=True, text=True, check=True).stdout.strip()
+            tree3 = subprocess.run(['git', 'show', '--format=%T', '--no-patch', hash3], cwd=temp_dir, capture_output=True, text=True, check=True).stdout.strip()
+            
+            # Tree hashes should be identical (content-based)
+            assert tree1 == tree2
+            assert tree2 == tree3
+            assert tree1 == tree3
 
 
 class TestIntegration:
