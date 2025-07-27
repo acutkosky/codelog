@@ -1,0 +1,24 @@
+[build-system]
+requires = ["flit_core>=3.4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "codelog"
+version = "0.1"
+authors = [
+  { name="Ashok Cutkosky", email="ashok@cutkosky.com" },
+]
+description = "utilities for ensuring code is tracked properly for use in running experiments"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+]
+
+[project.urls]
+Homepage = "https://github.com/acutkosky/codelog"
+Issues = "https://github.com/acutkosky/codelog/issues"
