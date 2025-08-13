@@ -1,4 +1,4 @@
-__version__ = "0.1"
+__version__ = "0.2"
 from codelog.commit import (
     get_most_recent_commit_hash,
     get_commit_hash,
