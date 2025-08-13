@@ -299,6 +299,7 @@ class TestMakeSideCommit:
         """Test when working directory is clean but force=True."""
         mock_is_clean.return_value = True
         mock_run_git.side_effect = [
+            "main",          # _get_current_branch_or_commit (current branch)
             "tree123",       # write-tree
             "parent123",     # rev-parse HEAD (parent commit)
             "commit456",     # commit-tree
@@ -326,6 +327,7 @@ class TestMakeSideCommit:
         """Test when working directory is dirty - should create side commit."""
         mock_is_clean.return_value = False
         mock_run_git.side_effect = [
+            "main",          # _get_current_branch_or_commit (current branch)
             "tree123",       # write-tree
             "parent123",     # rev-parse HEAD (parent commit)
             "commit456",     # commit-tree
@@ -352,6 +354,7 @@ class TestMakeSideCommit:
         """Test side commit creation with specific path."""
         mock_is_clean.return_value = False
         mock_run_git.side_effect = [
+            "main",          # _get_current_branch_or_commit (current branch)
             "tree123",       # write-tree
             "parent123",     # rev-parse HEAD (parent commit)
             "commit456",     # commit-tree
@@ -378,6 +381,7 @@ class TestMakeSideCommit:
         """Test side commit creation when there's a parent commit."""
         mock_is_clean.return_value = False
         mock_run_git.side_effect = [
+            "main",          # _get_current_branch_or_commit (current branch)
             "tree123",       # write-tree
             "parent123",     # rev-parse HEAD (parent commit)
             "commit456",     # commit-tree
@@ -402,6 +406,7 @@ class TestMakeSideCommit:
         """Test side commit creation when there's no parent commit (new repo)."""
         mock_is_clean.return_value = False
         mock_run_git.side_effect = [
+            "main",                          # _get_current_branch_or_commit (current branch)
             "tree123",                       # write-tree
             RuntimeError("No commits yet"),  # rev-parse HEAD fails
             "commit456",                     # commit-tree
@@ -431,7 +436,10 @@ class TestMakeSideCommit:
              patch('codelog.commit._run_git_command') as mock_run_git:
             
             mock_create_index.return_value = ("/tmp/index.tmp", {"GIT_INDEX_FILE": "/tmp/index.tmp"})
-            mock_run_git.side_effect = RuntimeError("Git command failed")
+            mock_run_git.side_effect = [
+                "main",                      # _get_current_branch_or_commit (current branch)
+                RuntimeError("Git command failed")  # write-tree fails
+            ]
             
             with pytest.raises(RuntimeError, match="Git command failed"):
                 make_side_commit()
@@ -451,6 +459,7 @@ class TestMakeSideCommit:
             
             mock_create_index.return_value = ("/tmp/index.tmp", {"GIT_INDEX_FILE": "/tmp/index.tmp"})
             mock_run_git.side_effect = [
+                "main",          # _get_current_branch_or_commit (current branch)
                 "tree123",       # write-tree
                 "parent123",     # rev-parse HEAD (parent commit)
                 "commit456",     # commit-tree
@@ -469,7 +478,86 @@ class TestMakeSideCommit:
             
             assert branch_call is not None
             branch_name = branch_call[0][0][1]  # The branch name is the second element of the command list
-            assert branch_name.startswith("side-commit-")
+            assert "side-commit_" in branch_name
+            assert "commit456" in branch_call[0][0]  # Should point to our commit
+    
+    @patch('codelog.commit._is_working_directory_clean')
+    @patch('codelog.commit._run_git_command')
+    def test_side_commit_with_prefix_parameter(self, mock_run_git, mock_is_clean):
+        """Test side commit creation with prefix parameter."""
+        mock_is_clean.return_value = False
+        mock_run_git.side_effect = [
+            "main",          # _get_current_branch_or_commit (current branch)
+            "tree123",       # write-tree
+            "parent123",     # rev-parse HEAD (parent commit)
+            "commit456",     # commit-tree
+            None            # branch creation (no output)
+        ]
+        
+        with patch('codelog.commit._create_temporary_index') as mock_create_index, \
+             patch('codelog.commit._add_tracked_files_to_temp_index') as mock_add_files, \
+             patch('codelog.commit._cleanup_temporary_index') as mock_cleanup:
+            
+            mock_create_index.return_value = ("/tmp/index.tmp", {"GIT_INDEX_FILE": "/tmp/index.tmp"})
+            
+            result = make_side_commit(prefix="experiment")
+            
+            assert result == "commit456"
+            mock_is_clean.assert_called_once_with(None)
+            mock_create_index.assert_called_once_with(None)
+            mock_add_files.assert_called_once_with(None, {"GIT_INDEX_FILE": "/tmp/index.tmp"})
+            mock_cleanup.assert_called_once_with("/tmp/index.tmp")
+            
+            # Verify branch name includes prefix and current branch
+            branch_call = None
+            for call in mock_run_git.call_args_list:
+                if call[0][0][0] == 'branch':
+                    branch_call = call
+                    break
+            
+            assert branch_call is not None
+            branch_name = branch_call[0][0][1]  # The branch name is the second element of the command list
+            assert branch_name.startswith("experiment_main_side-commit_")
+            assert "commit456" in branch_call[0][0]  # Should point to our commit
+    
+    @patch('codelog.commit._is_working_directory_clean')
+    @patch('codelog.commit._run_git_command')
+    def test_side_commit_with_prefix_detached_head(self, mock_run_git, mock_is_clean):
+        """Test side commit creation with prefix parameter in detached HEAD state."""
+        mock_is_clean.return_value = False
+        mock_run_git.side_effect = [
+            "HEAD",          # _get_current_branch_or_commit (detached HEAD)
+            "a1b2c3d",       # _get_current_branch_or_commit (short commit hash)
+            "tree123",       # write-tree
+            "parent123",     # rev-parse HEAD (parent commit)
+            "commit456",     # commit-tree
+            None            # branch creation (no output)
+        ]
+        
+        with patch('codelog.commit._create_temporary_index') as mock_create_index, \
+             patch('codelog.commit._add_tracked_files_to_temp_index') as mock_add_files, \
+             patch('codelog.commit._cleanup_temporary_index') as mock_cleanup:
+            
+            mock_create_index.return_value = ("/tmp/index.tmp", {"GIT_INDEX_FILE": "/tmp/index.tmp"})
+            
+            result = make_side_commit(prefix="test")
+            
+            assert result == "commit456"
+            mock_is_clean.assert_called_once_with(None)
+            mock_create_index.assert_called_once_with(None)
+            mock_add_files.assert_called_once_with(None, {"GIT_INDEX_FILE": "/tmp/index.tmp"})
+            mock_cleanup.assert_called_once_with("/tmp/index.tmp")
+            
+            # Verify branch name includes prefix and short commit hash
+            branch_call = None
+            for call in mock_run_git.call_args_list:
+                if call[0][0][0] == 'branch':
+                    branch_call = call
+                    break
+            
+            assert branch_call is not None
+            branch_name = branch_call[0][0][1]  # The branch name is the second element of the command list
+            assert branch_name.startswith("test_a1b2c3d_side-commit_")
             assert "commit456" in branch_call[0][0]  # Should point to our commit
 
 
@@ -528,7 +616,7 @@ class TestMakeSideCommitIntegration:
             # Verify the side branch points to our commit
             side_branch = None
             for branch in branches:
-                if branch.startswith('side-commit-') and not branch.startswith('*'):
+                if 'side-commit_' in branch and not branch.startswith('*'):
                     side_branch = branch.strip()
                     break
             
@@ -705,7 +793,7 @@ class TestMakeSideCommitIntegration:
             # Verify all branches exist
             result = subprocess.run(['git', 'branch'], cwd=temp_dir, capture_output=True, text=True, check=True)
             branches = [line.strip() for line in result.stdout.split('\n') if line.strip()]
-            side_branches = [b for b in branches if b.startswith('side-commit-')]
+            side_branches = [b for b in branches if 'side-commit_' in b]
             assert len(side_branches) == 3
 
     def test_side_commit_identical_content_same_hash(self):
@@ -734,7 +822,7 @@ class TestMakeSideCommitIntegration:
             # Verify all branches exist
             result = subprocess.run(['git', 'branch'], cwd=temp_dir, capture_output=True, text=True, check=True)
             branches = [line.strip() for line in result.stdout.split('\n') if line.strip()]
-            side_branches = [b for b in branches if b.startswith('side-commit-')]
+            side_branches = [b for b in branches if 'side-commit_' in b]
             assert len(side_branches) == 3
             
             # Verify we can recover the exact state from any of the hashes

@@ -187,6 +187,28 @@ def _is_working_directory_clean(path: Optional[str] = None) -> bool:
     return not bool(status_output.strip())
 
 
+def _get_current_branch_or_commit(path: Optional[str] = None) -> str:
+    '''Get the current branch name or short commit hash if in detached HEAD state.
+    
+    Args:
+        path: Optional path to check. If None, uses current directory.
+        
+    Returns:
+        str: Current branch name, or short commit hash if in detached HEAD state.
+    '''
+    try:
+        # Try to get current branch name
+        branch_name = _run_git_command(['rev-parse', '--abbrev-ref', 'HEAD'], path)
+        if branch_name == 'HEAD':
+            # We're in detached HEAD state, get short commit hash
+            return _run_git_command(['rev-parse', '--short', 'HEAD'], path)
+        return branch_name
+    except RuntimeError:
+        # If we can't get branch name or commit hash (e.g., no commits yet),
+        # return a default value
+        return "new"
+
+
 def get_most_recent_commit_hash(path: Optional[str] = None) -> str:
     '''Returns the most recent commit hash of the codebase.
     
@@ -256,7 +278,7 @@ def ensure_code_is_tracked(path: Optional[str] = None) -> str:
     return commit_hash
 
 
-def make_side_commit(path: Optional[str] = None, force: bool = False) -> str:
+def make_side_commit(path: Optional[str] = None, prefix: str = "",force: bool = False) -> str:
     '''Checks in the current code into a new branch with a short unique name.
     The current file contents of the directory are not changed at any time, and the
     current git state is not changed (with the exception of the new branch).
@@ -271,6 +293,7 @@ def make_side_commit(path: Optional[str] = None, force: bool = False) -> str:
     
     Args:
         path: Optional path to make the side commit in. If None, uses current directory.
+        prefix: Optional prefix to prepend to the branch name. Defaults to empty string.
         force: If True, always create a side commit even if working directory is clean.
                If False, return current commit hash if working directory is clean.
         
@@ -284,10 +307,13 @@ def make_side_commit(path: Optional[str] = None, force: bool = False) -> str:
     if not force and _is_working_directory_clean(path):
         return _run_git_command(['rev-parse', 'HEAD'], path)
     
+    # Get current branch name or short commit hash
+    current_branch_or_commit = _get_current_branch_or_commit(path)
+    
     # Generate unique branch name using timestamp and process ID
     timestamp = int(time.time() * 1000000)  # Use microseconds for more uniqueness
     process_id = os.getpid()
-    branch_name = f"side-commit-{timestamp}-{process_id}"
+    branch_name = f"{prefix}_{current_branch_or_commit}_side-commit_{timestamp}_{process_id}"
     
     # Create temporary index for this operation
     temp_index_path, index_env = _create_temporary_index(path)
