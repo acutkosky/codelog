@@ -264,8 +264,8 @@ def ensure_code_is_tracked(path: Optional[str] = None) -> str:
     commit_hash = get_commit_hash(path)
     if commit_hash is None:
         # Get detailed status information for the error message
-        status_output = _run_git_command(['status', '--short'], path)
-        status_lines = [line for line in status_output.split('\n') if line.strip()]
+        status_output = _run_git_command(['status', '--porcelain'], path)
+        status_lines = [line for line in status_output.split('\n') if not line.strip().startswith('??')]
         
         if status_lines:
             raise RuntimeError(
