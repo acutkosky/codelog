@@ -184,7 +184,7 @@ def _is_working_directory_clean(path: Optional[str] = None) -> bool:
               False otherwise.
     '''
     status_output = _run_git_command(['status', '--porcelain'], path)
-    return not bool(status_output.strip())
+    return all([line.strip().startswith('??') for line in status_output.split('\n')])
 
 
 def _get_current_branch_or_commit(path: Optional[str] = None) -> str:
@@ -265,7 +265,7 @@ def ensure_code_is_tracked(path: Optional[str] = None) -> str:
     if commit_hash is None:
         # Get detailed status information for the error message
         status_output = _run_git_command(['status', '--porcelain'], path)
-        status_lines = [line for line in status_output.split('\n') if not line.strip().startswith('??')]
+        status_lines = [line for line in status_output.split('\n') if not line.strip()]
         
         if status_lines:
             raise RuntimeError(
